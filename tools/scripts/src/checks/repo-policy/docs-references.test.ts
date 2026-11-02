@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { passingRepo } from "./fixtures/passing-repo.ts";
 import { failuresOf, repo } from "./fixtures/repo.ts";
-import { docsCodePaths, docsReferences } from "./docs-references.ts";
+import { codePathReferences, docsCodePaths, docsReferences } from "./docs-references.ts";
 
 const base = passingRepo;
 
@@ -250,5 +250,128 @@ describe("references to docs/: the edges", () => {
     expect(violations(repo(files))).toEqual([
       "lefthook.yml cites docs/adr/0003, which does not exist.",
     ]);
+  });
+});
+
+describe("references from the configs and the scripts to files of the code", () => {
+  const violations = failuresOf(codePathReferences);
+  const cite = (line: string, path = "lefthook.yml") => ({ [path]: `${line}\n` });
+  const missing = (path: string, source = "lefthook.yml") =>
+    `${source} names ${path}, which does not exist. The file was moved or removed: write its path now, or the directory it is in.`;
+
+  it.each([
+    ["a path", '- "packages/a/b.ts"', ["packages/a/b.ts"]],
+    ["a path in a comment", "# see tools/a/b.ts for it", ["tools/a/b.ts"]],
+    ["a path that ends a sentence", "# it is in apps/a/b.ts.", ["apps/a/b.ts"]],
+    ["a path with a line number", "# tools/a.ts:12", ["tools/a.ts"]],
+    ["a path in a dot directory", "# .github/workflows/a.yml", [".github/workflows/a.yml"]],
+    ["a path in single quotes", "const p = 'packages/a/b.ts';", ["packages/a/b.ts"]],
+  ])("passes %s that exists", (_, line, exists) => {
+    expect(
+      violations(repo({ ...cite(line), ...Object.fromEntries(exists.map((path) => [path, ""])) })),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["a glob", '- "packages/*/src/a.ts"'],
+    ["a glob of a directory", '- "packages/db/migrations/**"'],
+    ["a placeholder", "# packages/<name>/package.json"],
+    ["a root alone", "# packages/ and apps/"],
+    ["a glob after a directory", "# apps/web/src/**/x.ts and packages/*/src/x.ts"],
+    ["a glob of braces", "# {apps,packages}/*/src/x.ts"],
+    ["a name with no extension", "# packages/a/src and tools/scripts"],
+    ["a path inside a longer path", "# https://example.com/apps/a/b.ts"],
+    ["a name that is not under a directory of the code", "# docs/a.ts and src/a.ts"],
+  ])("does not read %s as a file the tree must have", (_, line) => {
+    expect(violations(repo(cite(line)))).toEqual([]);
+  });
+
+  it("reads a directory with a slash, which must have a file of the tree under it", () => {
+    expect(violations(repo({ ...cite("# packages/a/src/"), "packages/a/src/x.ts": "" }))).toEqual(
+      [],
+    );
+    expect(violations(repo(cite("# packages/a/src/ and packages/b/")))).toEqual([
+      missing("packages/a/src/"),
+      missing("packages/b/"),
+    ]);
+  });
+
+  it("resolves a relative path from the directory of the file that names it", () => {
+    const named = cite('import("../../../apps/c.ts") and "./packages/d.ts"', "packages/x/y/z.ts");
+    expect(
+      violations(repo({ ...named, "apps/c.ts": "", "packages/x/y/packages/d.ts": "" })),
+    ).toEqual([]);
+    expect(violations(repo(named))).toEqual([
+      missing("../../../apps/c.ts", "packages/x/y/z.ts"),
+      missing("./packages/d.ts", "packages/x/y/z.ts"),
+    ]);
+  });
+
+  it("takes the top-level directories from the tree, so a directory of its own is read too", () => {
+    expect(violations(repo({ ...cite("# docker/a/b.sh"), "docker/c.txt": "" }))).toEqual([
+      missing("docker/a/b.sh"),
+    ]);
+    expect(violations(repo(cite("# docker/a/b.sh")))).toEqual([]);
+  });
+
+  it("refuses a path that does not exist, in a config, a workflow and a script", () => {
+    expect(
+      violations(
+        repo({
+          ...cite("# packages/a/missing.ts"),
+          ...cite("run: node tools/b/missing.js", ".github/workflows/ci.yml"),
+          ...cite('export const entry = "apps/c/missing.ts";', "tools/scripts/src/checks/x.ts"),
+        }),
+      ),
+    ).toEqual([
+      missing("tools/b/missing.js", ".github/workflows/ci.yml"),
+      missing("packages/a/missing.ts"),
+      missing("apps/c/missing.ts", "tools/scripts/src/checks/x.ts"),
+    ]);
+  });
+
+  it("names a path once for a file, and every path of a line", () => {
+    expect(violations(repo(cite("# apps/a/x.ts apps/a/x.ts packages/b/y.ts")))).toEqual([
+      missing("apps/a/x.ts"),
+      missing("packages/b/y.ts"),
+    ]);
+  });
+
+  it("refuses a path in Markdown outside docs/ too", () => {
+    expect(violations(repo(cite("See `tools/a/missing.ts`.", "AGENTS.md")))).toEqual([
+      missing("tools/a/missing.ts", "AGENTS.md"),
+    ]);
+  });
+
+  it.each([
+    "docs/tooling/a.md",
+    ".agents/skills/a/SKILL.md",
+    ".kiro/skills/a/SKILL.md",
+    "research/a.md",
+    "pnpm-lock.yaml",
+    "mise.lock",
+    "packages/a/CHANGELOG.md",
+    "tools/scripts/src/checks/a.test.ts",
+    "apps/web/src/a.test.tsx",
+    "tools/scripts/src/checks/repo-policy/fixtures/passing-repo.ts",
+    "packages/a/src/__fixtures__/b.ts",
+    "packages/a/src/db.gen.ts",
+    ".gitignore",
+    "apps/web/.prettierignore",
+  ])("does not check %s, which may name a missing file on purpose", (path) => {
+    expect(violations(repo({ [path]: "apps/a/missing.ts\n" }))).toEqual([]);
+  });
+
+  it("does not read binary files", () => {
+    expect(violations(repo({ "assets/a.png": "\0apps/a/missing.ts\n" }))).toEqual([]);
+  });
+
+  it("reads nothing in a tree that has no directory", () => {
+    const flat = {
+      tracked: new Map([["a.md", "100644"]]),
+      untrackedSteering: [],
+      viteHooks: false,
+    };
+    expect(violations({ ...flat, read: () => "apps/a/missing.ts\n" })).toEqual([]);
   });
 });

@@ -7,7 +7,7 @@
 //   ci.ts                CI workflows and the ruleset of main
 //   assurance-catalog.ts the assurance catalog and the configs
 //   agent-permissions.ts the permission rules of the agents
-//   docs-references.ts   references to docs/ from outside docs/, and to the code from docs/
+//   docs-references.ts   references to docs/ from outside docs/, and to the code from docs/ and from the configs and scripts
 //   modules.ts           the dependencies between the modules, and how each resolves and lints them
 //   drivers.ts           the layout of the drivers and of the modules: what src/ holds, what an entry file contains
 //   ui-stories.ts        a story next to each part of packages/ui
@@ -20,7 +20,7 @@
 import { agentPermissions } from "./agent-permissions.ts";
 import { catalogMatchesConfigs } from "./assurance-catalog.ts";
 import { ciTargetsHaveCommands, mainNeedsEveryJob, requiredChecksRun } from "./ci.ts";
-import { docsCodePaths, docsReferences } from "./docs-references.ts";
+import { codePathReferences, docsCodePaths, docsReferences } from "./docs-references.ts";
 import {
   driverEntriesOnlyReexport,
   driversDoNotUseEffect,
@@ -105,6 +105,7 @@ function run(tree: Tree): string[] {
     ...shellScriptsHaveTests(tree),
     ...docsReferences(tree),
     ...docsCodePaths(tree),
+    ...codePathReferences(tree),
     ...ciTargetsHaveCommands(tree),
     ...noWorkspaceInCatalog(tree),
     ...uiComponentsHaveStories(tree),
